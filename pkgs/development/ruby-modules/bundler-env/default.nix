@@ -1,5 +1,5 @@
 { ruby, lib, callPackage, defaultGemConfig, buildEnv, runCommand
-, bundler, rsync
+, bundler, rsync, buildRubyGem
 }@defs:
 
 { name ? null
@@ -23,7 +23,7 @@
 let
   inherit (import ../bundled-common/functions.nix {inherit lib ruby gemConfig groups; }) genStubsScript;
 
-  basicEnv = (callPackage ../bundled-common { inherit bundler; }) (args // { inherit pname name; mainGemName = pname; });
+  basicEnv = (callPackage ../bundled-common { inherit bundler buildRubyGem; }) (args // { inherit pname name; mainGemName = pname; });
 
   inherit (basicEnv) envPaths;
   # Idea here is a mkDerivation that gen-bin-stubs new stubs "as specified" -
