@@ -1,3 +1,4 @@
+import fnmatch
 import functools
 import hashlib
 import json
@@ -182,11 +183,13 @@ def try_get_crate_manifest_path_from_mainfest_path(manifest_path: Path, crate_na
     return None
 
 
-def find_crate_manifest_in_tree(tree: Path, crate_name: str) -> Path:
+def find_crate_manifest_in_tree(tree: Path, crate_name: str, exclude_globs: list[str]) -> Path:
     # in some cases Cargo.toml is not located at the top level, so we also look at subdirectories
     manifest_paths = tree.glob("**/Cargo.toml")
 
     for manifest_path in manifest_paths:
+        if should_exclude_manifest_path(tree, manifest_path, exclude_globs):
+            continue
         res = try_get_crate_manifest_path_from_mainfest_path(manifest_path, crate_name)
         if res is not None:
             return res
@@ -194,7 +197,32 @@ def find_crate_manifest_in_tree(tree: Path, crate_name: str) -> Path:
     raise Exception(f"Couldn't find manifest for crate {crate_name} inside {tree}.")
 
 
-def copy_and_patch_git_crate_subtree(git_tree: Path, crate_name: str, crate_out_dir: Path) -> None:
+def should_exclude_manifest_path(tree: Path, manifest_path: Path, exclude_globs: list[str]) -> bool:
+    if not exclude_globs:
+        return False
+
+    rel_path = manifest_path.relative_to(tree).as_posix()
+    return any(fnmatch.fnmatchcase(rel_path, glob) for glob in exclude_globs)
+
+
+def parse_exclude_globs(args: list[str]) -> tuple[list[str], list[str]]:
+    exclude_globs: list[str] = []
+    positional: list[str] = []
+
+    it = iter(args)
+    for arg in it:
+        if arg == "--exclude-glob":
+            try:
+                exclude_globs.append(next(it))
+            except StopIteration:
+                raise Exception("Expected a value after --exclude-glob")
+        else:
+            positional.append(arg)
+
+    return positional, exclude_globs
+
+
+def copy_and_patch_git_crate_subtree(git_tree: Path, crate_name: str, crate_out_dir: Path, exclude_globs: list[str]) -> None:
 
     # This function will get called by copytree to decide which entries of a directory should be copied
     # We'll copy everything except symlinks that are invalid
@@ -225,7 +253,7 @@ def copy_and_patch_git_crate_subtree(git_tree: Path, crate_name: str, crate_out_
 
         return ignorelist
 
-    crate_manifest_path = find_crate_manifest_in_tree(git_tree, crate_name)
+    crate_manifest_path = find_crate_manifest_in_tree(git_tree, crate_name, exclude_globs)
     crate_tree = crate_manifest_path.parent
 
     eprint(f"Copying to {crate_out_dir}")
@@ -256,7 +284,7 @@ def extract_crate_tarball_contents(tarball_path: Path, crate_out_dir: Path) -> N
     subprocess.check_output(cmd)
 
 
-def create_vendor(vendor_staging_dir: Path, out_dir: Path) -> None:
+def create_vendor(vendor_staging_dir: Path, out_dir: Path, exclude_globs: list[str]) -> None:
     lockfile_path = vendor_staging_dir / "Cargo.lock"
     out_dir.mkdir(exist_ok=True)
     shutil.copy(lockfile_path, out_dir / "Cargo.lock")
@@ -290,7 +318,7 @@ def create_vendor(vendor_staging_dir: Path, out_dir: Path) -> None:
             git_sha_rev = source_info["git_sha_rev"]
             git_tree = vendor_staging_dir / "git" / git_sha_rev
 
-            copy_and_patch_git_crate_subtree(git_tree, pkg["name"], crate_out_dir)
+            copy_and_patch_git_crate_subtree(git_tree, pkg["name"], crate_out_dir, exclude_globs)
 
             # git based crates allow having no checksum information
             with open(crate_out_dir / ".cargo-checksum.json", "w") as f:
@@ -330,10 +358,14 @@ def create_vendor(vendor_staging_dir: Path, out_dir: Path) -> None:
 
 def main() -> None:
     subcommand = sys.argv[1]
+    args = sys.argv[2:]
+    args, exclude_globs = parse_exclude_globs(args)
+    if len(args) != 2:
+        raise Exception(f"Expected 2 positional arguments after subcommand '{subcommand}', got {len(args)}")
 
     subcommand_func_dict = {
-        "create-vendor-staging": lambda: create_vendor_staging(lockfile_path=Path(sys.argv[2]), out_dir=Path(sys.argv[3])),
-        "create-vendor": lambda: create_vendor(vendor_staging_dir=Path(sys.argv[2]), out_dir=Path(sys.argv[3]))
+        "create-vendor-staging": lambda: create_vendor_staging(lockfile_path=Path(args[0]), out_dir=Path(args[1])),
+        "create-vendor": lambda: create_vendor(vendor_staging_dir=Path(args[0]), out_dir=Path(args[1]), exclude_globs=exclude_globs)
     }
 
     subcommand_func = subcommand_func_dict.get(subcommand)

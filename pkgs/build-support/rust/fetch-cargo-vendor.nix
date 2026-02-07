@@ -38,6 +38,7 @@ in
   name ? if args ? pname && args ? version then "${args.pname}-${args.version}" else "cargo-deps",
   hash ? (throw "fetchCargoVendor requires a `hash` value to be set for ${name}"),
   nativeBuildInputs ? [ ],
+  excludeGlobs ? [ ],
   ...
 }@args:
 
@@ -50,6 +51,7 @@ let
     "version"
     "nativeBuildInputs"
     "hash"
+    "excludeGlobs"
   ];
 
   vendorStaging = stdenvNoCC.mkDerivation (
@@ -103,5 +105,6 @@ runCommand "${name}-vendor"
     ];
   }
   ''
-    fetch-cargo-vendor-util create-vendor "$vendorStaging" "$out"
+    fetch-cargo-vendor-util create-vendor "$vendorStaging" "$out" \
+      ${lib.optionalString (excludeGlobs != [ ]) (lib.concatMapStringsSep " " (glob: "--exclude-glob ${lib.escapeShellArg glob}") excludeGlobs)}
   ''
